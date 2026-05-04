@@ -1,0 +1,10 @@
+# Alte Versionen & Notizen ignorieren
+app_v1.py
+app_v2.py
+*.txt
+!requirements.txt
+
+# Python-Müll
+__pycache__/
+.venv/
+.streamlit/
