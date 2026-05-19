@@ -67,7 +67,6 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # === NEU: PROJEKTIONEN & GEWICHTUNG ===
     with st.expander("📊 Projektionen & Gewichtung", expanded=True):
         st.caption("Welche Quellen sollen einfließen und wie stark?")
         selected_sources = []
@@ -87,13 +86,11 @@ with st.sidebar:
             st.error("Bitte mindestens eine Quelle mit Gewicht > 0 auswählen!")
             st.stop()
 
-    # === NEU: ADP ANZEIGE ===
     with st.expander("📉 ADP Anzeige", expanded=False):
         st.caption("Welche ADPs sollen in den Tabellen sichtbar sein?")
         selected_adps = []
         available_adps = [col for col in ADP_SPALTEN if col in raw_df.columns]
         for adp_col in available_adps:
-            # adp_average standardmäßig an, der Rest aus
             if st.checkbox(adp_col, value=(adp_col == 'adp_average')):
                 selected_adps.append(adp_col)
 
@@ -135,7 +132,6 @@ with st.sidebar:
 # --- 3. DYNAMISCHE DATENAUFBEREITUNG (Punkte & Metriken) ---
 working_df = raw_df.copy()
 
-# 3.1 Vektorisierte Berechnung der gewichteten Punkte
 w_series = pd.Series(source_weights)
 mask = working_df[selected_sources].notna()
 w_matrix = mask * w_series
@@ -145,7 +141,6 @@ weighted_sum = (working_df[selected_sources].fillna(0) * w_series).sum(axis=1)
 working_df['points'] = np.where(sum_weights > 0, weighted_sum / sum_weights, 0)
 working_df['sd_pts'] = working_df[selected_sources].std(axis=1).fillna(0)
 
-# VONA-Simulator benötigt ein einheitliches ADP als Referenz (adp_average bevorzugt)
 working_df['adp'] = working_df['adp_average'].fillna(999) if 'adp_average' in working_df.columns else 999
 
 def calculate_dynamic_metrics(df):
@@ -361,7 +356,7 @@ def draft_player(search_string):
     else:
         st.error("⚠️ Spieler nicht gefunden oder bereits weg.")
 
-def plot_position_cliff(pos):
+def plot_position_cliff(pos, limit=15):
     pos_all = full_board[full_board['pos'] == pos].sort_values('original_pos_rank')
     available_this_pos = pos_all[~pos_all['player'].isin(st.session_state.drafted_names)]
     
@@ -371,7 +366,8 @@ def plot_position_cliff(pos):
 
     first_avail_idx = available_this_pos.index[0]
     start_idx = pos_all.index.get_loc(first_avail_idx)
-    window = pos_all.iloc[start_idx : start_idx + 15].copy()
+    # Nutze das übergebene Limit für den sichtbaren Grafik-Ausschnitt
+    window = pos_all.iloc[start_idx : start_idx + limit].copy()
     
     def get_marker_symbol(rank):
         if rank == BASELINES_STARTER.get(pos): return 'star'
@@ -409,7 +405,7 @@ def plot_position_cliff(pos):
     ))
 
     fig.update_layout(
-        title=f"Value Cliffs & Tiers: {pos}",
+        title=f"Value Cliffs & Tiers: {pos} (Top {limit} verfügbar)",
         xaxis_title=f"{pos} Position Rank",
         yaxis_title="VOR Starter Value",
         height=400,
@@ -461,7 +457,8 @@ sim_base_df = sim_base_df.sort_values('Opponent_Score', ascending=True)
 
 available_df['VONA'] = available_df['VOR_Waiver'].round(1)
 
-top_candidates = available_df.sort_values('z_score', ascending=False).head(75)
+# Limit auf 150 erhöht, um tiefere Draft-Phasen akkurat zu berechnen
+top_candidates = available_df.sort_values('z_score', ascending=False).head(150)
 vona_dict = {}
 
 for idx, row in top_candidates.iterrows():
@@ -486,13 +483,13 @@ available_df['VONA'] = available_df['player'].map(vona_dict).fillna(available_df
 st.markdown("### 📋 Draft Board")
 search_term = st.text_input("🔍 Spielersuche (filtert das Board):", "")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overall", "RB", "WR", "TE", "QB", "👥 Liga-Roster"])
+# NEUE TABS HINZUGEFÜGT FÜR KICKER & DST
+tab_ovr, tab_rb, tab_wr, tab_te, tab_qb, tab_k, tab_dst, tab_roster = st.tabs(["Overall", "RB", "WR", "TE", "QB", "K", "DST", "👥 Liga-Roster"])
 
-# Dynamische Spaltenauswahl basierend auf Checkboxen
 cols_overall = ['Ovr Rank', 'player', 'Pos Rank', 'points', 'team', 'z_score', 'VONA', 'VOR_Starter', 'Risk'] + selected_adps + selected_sources
 rename_overall = {'z_score': 'Z-Score', 'VOR_Starter': 'VOR (Start)', 'Risk': 'Risk (CV)', 'points': 'Points'}
 
-with tab1:
+with tab_ovr:
     sort_by = st.radio("🔀 Sortieren nach:", ["Z-Score", "VONA", "VOR_Starter"], horizontal=True)
     display_df = available_df[cols_overall].copy()
     
@@ -506,7 +503,9 @@ with tab1:
     display_df = display_df.rename(columns=rename_overall)
     display_df['VOR (Start)'] = display_df['VOR (Start)'].round(1) 
     display_df['Points'] = display_df['Points'].round(1)
-    display_df = display_df.head(50)
+    
+    # LIMIT FÜR OVERALL AUF 200 ERHÖHT
+    display_df = display_df.head(200)
     
     st.caption("💡 Klicke auf einen Spieler, um das Draft-Popup zu öffnen (dort kannst du ihn auch in die Queue legen).")
     
@@ -519,8 +518,9 @@ with tab1:
 cols_pos = ['Pos Rank', 'player', 'points', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
 rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'Risk': 'Risk (CV)', 'points': 'Points'}
 
-def render_pos_tab(pos):
-    plot_position_cliff(pos)
+# NEU: Parameter `limit` ermöglicht positionsabhängige Tabellenlänge
+def render_pos_tab(pos, limit):
+    plot_position_cliff(pos, limit)
     pos_df = available_df[available_df['pos'] == pos][cols_pos].copy()
     
     if search_term:
@@ -531,20 +531,24 @@ def render_pos_tab(pos):
     pos_df['VOR (Waiver)'] = pos_df['VOR (Waiver)'].round(1)
     pos_df['Points'] = pos_df['Points'].round(1)
     
-    display_pos_df = pos_df.head(15)
+    # Dynamisches Limit anwenden
+    display_pos_df = pos_df.head(limit)
     
     event = st.dataframe(display_pos_df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
     if len(event.selection.rows) > 0:
         selected_player = display_pos_df.iloc[event.selection.rows[0]]['player']
         draft_confirmation_dialog(selected_player)
 
-with tab2: render_pos_tab('RB')
-with tab3: render_pos_tab('WR')
-with tab4: render_pos_tab('TE')
-with tab5: render_pos_tab('QB')
+# INDIVIDUELLE LIMITS (Top 50 für WR/RB, Top 20 für Rest)
+with tab_rb: render_pos_tab('RB', 50)
+with tab_wr: render_pos_tab('WR', 50)
+with tab_te: render_pos_tab('TE', 20)
+with tab_qb: render_pos_tab('QB', 20)
+with tab_k: render_pos_tab('K', 20)
+with tab_dst: render_pos_tab('DST', 20)
 
 # --- LIGA ROSTER TAB ---
-with tab6:
+with tab_roster:
     st.subheader("Roster aller Teams")
     cols = st.columns(4) 
     for t_id in range(1, int(TEAMS_IN_LEAGUE) + 1):
