@@ -5,10 +5,13 @@ import numpy as np
 
 # --- KONFIGURATION ---
 CSV_PFAD = "26_draft_projections.csv"
-POS_COLORS = {'QB': '#e63946', 'RB': '#2a9d8f', 'WR': '#457b9d', 'TE': '#f4a261'}
+POS_COLORS = {
+    'QB': '#e63946', 'RB': '#2a9d8f', 'WR': '#457b9d', 'TE': '#f4a261', 
+    'K': '#a8dadc', 'DST': '#1d3557'
+}
 
-# ⚠️ BITTE ANPASSEN: Trage hier die exakten Spaltennamen deiner Quellen aus der CSV ein!
-QUELLEN_SPALTEN = ['ESPN', 'Yahoo', 'CBS', 'NFL', 'FantasyPros'] 
+QUELLEN_SPALTEN = ['CBS', 'ESPN', 'FantasyPros', 'FantasySharks', 'RTSports'] 
+ADP_SPALTEN = ['adp_average', 'adp_yahoo', 'adp_espn', 'adp_nfl']
 
 st.set_page_config(page_title="FF Draft Assistant 26", layout="wide", initial_sidebar_state="expanded")
 
@@ -27,7 +30,13 @@ def load_raw_data():
 
 raw_df = load_raw_data()
 
-# --- 2. SIDEBAR: ROSTER & EINSTELLUNGEN ---
+# Session State Initialisierung
+if 'drafted_names' not in st.session_state:
+    st.session_state.drafted_names = []
+    st.session_state.history = []
+    st.session_state.queue = [] 
+
+# --- 2. SIDEBAR: EINSTELLUNGEN & GEWICHTUNG ---
 with st.sidebar:
     st.header("🏈 Roster & Liga Settings")
     TEAMS_IN_LEAGUE = st.number_input("Teams in der Liga", min_value=8, max_value=16, value=12)
@@ -38,33 +47,66 @@ with st.sidebar:
     te_spots = st.number_input("Starting TEs", 1, 3, 1)
     bench_spots = st.number_input("Bench Spots", 0, 15, 6)
     
-    # Dynamische Baselines basierend auf deinen Vorgaben
     BASELINES_STARTER = {
         'QB': int(TEAMS_IN_LEAGUE * qb_spots) + 1 if qb_spots == 1 else int(TEAMS_IN_LEAGUE * qb_spots),
         'RB': int(TEAMS_IN_LEAGUE * (rb_spots + flex_spots * 0.45)),
         'WR': int(TEAMS_IN_LEAGUE * (wr_spots + flex_spots * 0.45)),
-        'TE': int(TEAMS_IN_LEAGUE * te_spots) + 1 if te_spots == 1 else int(TEAMS_IN_LEAGUE * te_spots)
+        'TE': int(TEAMS_IN_LEAGUE * te_spots) + 1 if te_spots == 1 else int(TEAMS_IN_LEAGUE * te_spots),
+        'K': int(TEAMS_IN_LEAGUE * 1),
+        'DST': int(TEAMS_IN_LEAGUE * 1)
     }
 
     BASELINES_WAIVER = {
         'QB': int(TEAMS_IN_LEAGUE * qb_spots * 1.5),
         'RB': int(TEAMS_IN_LEAGUE * (rb_spots + flex_spots * 0.45) * 2),
         'WR': int(TEAMS_IN_LEAGUE * (wr_spots + flex_spots * 0.45) * 2),
-        'TE': int(TEAMS_IN_LEAGUE * te_spots * 1.5)
+        'TE': int(TEAMS_IN_LEAGUE * te_spots * 1.5),
+        'K': int(TEAMS_IN_LEAGUE * 1.5),
+        'DST': int(TEAMS_IN_LEAGUE * 1.5)
     }
 
     st.markdown("---")
-    st.header("⚖️ VONA Gewichtung")
-    st.caption("Wonach draften deine Gegner?")
-    adp_weight_raw = st.number_input("ADP / Plattform (%)", 0, 100, 75)
-    z_weight_raw = st.number_input("Z-Score (%)", 0, 100, 15)
-    vor_weight_raw = st.number_input("VOR Waiver (%)", 0, 100, 10)
     
-    total_weight = adp_weight_raw + z_weight_raw + vor_weight_raw
-    if total_weight == 0: total_weight = 1
-    ADP_W = adp_weight_raw / total_weight
-    Z_W = z_weight_raw / total_weight
-    VOR_W = vor_weight_raw / total_weight
+    # === NEU: PROJEKTIONEN & GEWICHTUNG ===
+    with st.expander("📊 Projektionen & Gewichtung", expanded=True):
+        st.caption("Welche Quellen sollen einfließen und wie stark?")
+        selected_sources = []
+        source_weights = {}
+        
+        available_sources = [col for col in QUELLEN_SPALTEN if col in raw_df.columns]
+        for src in available_sources:
+            col1, col2 = st.columns([1, 2])
+            use_src = col1.checkbox(src, value=True)
+            if use_src:
+                w = col2.slider("Gewicht", 0, 100, 100, key=f"w_{src}", label_visibility="collapsed")
+                if w > 0:
+                    selected_sources.append(src)
+                    source_weights[src] = w
+                    
+        if not selected_sources:
+            st.error("Bitte mindestens eine Quelle mit Gewicht > 0 auswählen!")
+            st.stop()
+
+    # === NEU: ADP ANZEIGE ===
+    with st.expander("📉 ADP Anzeige", expanded=False):
+        st.caption("Welche ADPs sollen in den Tabellen sichtbar sein?")
+        selected_adps = []
+        available_adps = [col for col in ADP_SPALTEN if col in raw_df.columns]
+        for adp_col in available_adps:
+            # adp_average standardmäßig an, der Rest aus
+            if st.checkbox(adp_col, value=(adp_col == 'adp_average')):
+                selected_adps.append(adp_col)
+
+    st.markdown("---")
+    with st.expander("⚖️ VONA Gewichtung (Opponent)", expanded=False):
+        adp_weight_raw = st.number_input("ADP / Plattform (%)", 0, 100, 75)
+        z_weight_raw = st.number_input("Z-Score (%)", 0, 100, 15)
+        vor_weight_raw = st.number_input("VOR Waiver (%)", 0, 100, 10)
+        total_weight = adp_weight_raw + z_weight_raw + vor_weight_raw
+        if total_weight == 0: total_weight = 1
+        ADP_W = adp_weight_raw / total_weight
+        Z_W = z_weight_raw / total_weight
+        VOR_W = vor_weight_raw / total_weight
 
     st.markdown("---")
     st.header("⚙️ Draft Setup")
@@ -75,10 +117,6 @@ with st.sidebar:
         pick_in_round = (pick_num - 1) % TEAMS_IN_LEAGUE + 1
         if round_num % 2 != 0: return pick_in_round
         else: return TEAMS_IN_LEAGUE - pick_in_round + 1
-
-    if 'drafted_names' not in st.session_state:
-        st.session_state.drafted_names = []
-        st.session_state.history = []
 
     current_pick_num = len(st.session_state.history) + 1
     current_team_up = get_team_for_pick(current_pick_num)
@@ -93,7 +131,23 @@ with st.sidebar:
 
     picks_until_next = subsequent_own_pick - current_pick_num
 
-# --- 3. METRIKEN LIVE BERECHNEN ---
+
+# --- 3. DYNAMISCHE DATENAUFBEREITUNG (Punkte & Metriken) ---
+working_df = raw_df.copy()
+
+# 3.1 Vektorisierte Berechnung der gewichteten Punkte
+w_series = pd.Series(source_weights)
+mask = working_df[selected_sources].notna()
+w_matrix = mask * w_series
+sum_weights = w_matrix.sum(axis=1)
+weighted_sum = (working_df[selected_sources].fillna(0) * w_series).sum(axis=1)
+
+working_df['points'] = np.where(sum_weights > 0, weighted_sum / sum_weights, 0)
+working_df['sd_pts'] = working_df[selected_sources].std(axis=1).fillna(0)
+
+# VONA-Simulator benötigt ein einheitliches ADP als Referenz (adp_average bevorzugt)
+working_df['adp'] = working_df['adp_average'].fillna(999) if 'adp_average' in working_df.columns else 999
+
 def calculate_dynamic_metrics(df):
     df = df.sort_values(by=['pos', 'points'], ascending=[True, False]).reset_index(drop=True)
     df['original_pos_rank'] = df.groupby('pos')['points'].rank(ascending=False, method='first')
@@ -114,10 +168,9 @@ def calculate_dynamic_metrics(df):
     df['VOR_Waiver'] = df.apply(lambda row: row['points'] - baseline_waiver_pts.get(row['pos'], 0), axis=1)
 
     df['CV'] = df['sd_pts'] / df['points']
-    df['CV'] = df['CV'].fillna(0)
+    df['CV'] = df['CV'].replace([np.inf, -np.inf], np.nan).fillna(0)
     df['Risk'] = df['CV'].round(2)
 
-    # 1. Dynamische Scarcity-Gewichtung (VOB-Multiplier) berechnen
     pos_value_pool = {}
     for pos in df['pos'].unique():
         max_pts = df[df['pos'] == pos]['points'].max()
@@ -127,7 +180,6 @@ def calculate_dynamic_metrics(df):
     max_pool = max(pos_value_pool.values()) if pos_value_pool else 1
     dynamic_weights = {pos: (val / max_pool) for pos, val in pos_value_pool.items()}
 
-    # 2. Z-Score mit dynamischer Gewichtung berechnen
     df['z_score'] = 0.0
     for pos in df['pos'].unique():
         max_starter_rank = BASELINES_STARTER.get(pos, 12)
@@ -146,7 +198,8 @@ def calculate_dynamic_metrics(df):
 
     def calculate_pos_gap_tiers(pos_df):
         pos = pos_df['pos'].iloc[0]
-        n_tiers = 8 if pos in ['QB', 'RB', 'WR'] else 6 
+        n_tiers = 8 if pos in ['QB', 'RB', 'WR'] else 6 if pos == 'TE' else 3 
+        
         if len(pos_df) < n_tiers:
             pos_df['tier_label'] = "Tier 1"
             return pos_df
@@ -187,16 +240,36 @@ def calculate_dynamic_metrics(df):
     
     return df, dynamic_weights
 
-full_board, computed_weights = calculate_dynamic_metrics(raw_df.copy())
+full_board, computed_weights = calculate_dynamic_metrics(working_df)
 available_df = full_board[~full_board['player'].isin(st.session_state.drafted_names)].copy()
 
-# --- 4. SIDEBAR APPENDS (Dynamische Metriken anzeigen) ---
+
+# --- 4. SIDEBAR APPENDS ---
 with st.sidebar:
+    st.markdown("---")
+    st.header("🛒 Meine Queue")
+    if not st.session_state.queue:
+        st.write("*Noch keine Spieler in der Queue.*")
+    else:
+        for i, p in enumerate(st.session_state.queue):
+            col_name, col_up, col_down, col_del = st.columns([5, 1, 1, 1])
+            col_name.write(f"**{i+1}.** {p}")
+            
+            if col_up.button("↑", key=f"up_{p}") and i > 0:
+                st.session_state.queue[i], st.session_state.queue[i-1] = st.session_state.queue[i-1], st.session_state.queue[i]
+                st.rerun()
+                
+            if col_down.button("↓", key=f"down_{p}") and i < len(st.session_state.queue) - 1:
+                st.session_state.queue[i], st.session_state.queue[i+1] = st.session_state.queue[i+1], st.session_state.queue[i]
+                st.rerun()
+                
+            if col_del.button("❌", key=f"rm_{p}"):
+                st.session_state.queue.remove(p)
+                st.rerun()
+
     st.markdown("---")
     st.header("📈 Live Scarcity-Faktor")
     st.caption("Berechnete Knappheit pro Position:")
-    
-    # NEU: Einfache vertikale Liste per st.metric
     for pos in ['RB', 'WR', 'QB', 'TE']:
         if pos in computed_weights:
             st.metric(pos, f"{computed_weights[pos]:.2f}x")
@@ -230,15 +303,6 @@ with st.sidebar:
     if enemy_needs['TE'] >= 2: st.info(f"💡 Gegner suchen noch {enemy_needs['TE']} TEs.")
     if sum(enemy_needs.values()) <= 4: st.success("Gegner sind gut besetzt. BPA draften.")
 
-    st.markdown("---")
-    st.header("📊 Quellen")
-    selected_sources = []
-    available_sources = [col for col in QUELLEN_SPALTEN if col in full_board.columns]
-    if available_sources:
-        for src in available_sources:
-            if st.checkbox(f"{src} einblenden", value=False):
-                selected_sources.append(src)
-
 
 # --- 5. FARBEN & GRAFIK FUNKTIONEN ---
 def get_tier_color(tier_str):
@@ -246,26 +310,30 @@ def get_tier_color(tier_str):
     except: tier_num = 1
         
     color_map = {
-        1: '#FF1A1A', # Leuchtendes Rot
-        2: '#FFA500', # Orange
-        3: '#FFFF00', # Gelb
-        4: '#32CD32', # Grün (LimeGreen)
-        5: '#1E90FF', # Blau (DodgerBlue)
-        6: '#FF69B4', # Pink (HotPink)
+        1: '#FF1A1A', 2: '#FFA500', 3: '#FFFF00', 
+        4: '#32CD32', 5: '#1E90FF', 6: '#FF69B4'
     }
     if tier_num in color_map: return color_map[tier_num]
     else:
         gray_val = max(180 - (tier_num - 7) * 25, 50)
         return f"rgb({gray_val}, {gray_val}, {gray_val})"
 
-@st.dialog("Spieler Draften")
+@st.dialog("Aktion für Spieler")
 def draft_confirmation_dialog(player_name):
-    st.markdown(f"Möchtest du **{player_name}** mit Pick {len(st.session_state.history) + 1} auswählen?")
-    col1, col2 = st.columns(2)
-    if col1.button("✅ Ja, draften", use_container_width=True):
+    st.markdown(f"Was möchtest du mit **{player_name}** tun?")
+    col1, col2, col3 = st.columns(3)
+    
+    if col1.button("✅ Draften", use_container_width=True):
         draft_player(player_name)
         st.rerun()
-    if col2.button("❌ Abbrechen", use_container_width=True):
+        
+    if col2.button("⭐ Zur Queue", use_container_width=True):
+        if player_name not in st.session_state.queue:
+            st.session_state.queue.append(player_name)
+            st.session_state.last_msg = f"⭐ {player_name} zur Queue hinzugefügt!"
+        st.rerun()
+        
+    if col3.button("❌ Abbrechen", use_container_width=True):
         st.rerun()
 
 def draft_player(search_string):
@@ -275,6 +343,10 @@ def draft_player(search_string):
         player_row = exact_match.iloc[0] if not exact_match.empty else matches.iloc[0]
         
         st.session_state.drafted_names = st.session_state.drafted_names + [player_row['player']]
+        
+        if player_row['player'] in st.session_state.queue:
+            st.session_state.queue.remove(player_row['player'])
+            
         runden_nummer = (current_pick_num - 1) // TEAMS_IN_LEAGUE + 1
         pick_in_runde = (current_pick_num - 1) % TEAMS_IN_LEAGUE + 1
         
@@ -350,6 +422,7 @@ def plot_position_cliff(pos):
     
     st.plotly_chart(fig, use_container_width=True)
 
+
 # --- 6. HAUPTBEREICH (UI) ---
 col_title, col_undo = st.columns([3, 1])
 with col_title:
@@ -361,10 +434,15 @@ with col_undo:
             st.session_state.history = st.session_state.history[:-1]
             st.session_state.drafted_names = [name for name in st.session_state.drafted_names if name != last['player']]
             st.session_state.last_msg = f"↩️ Pick rückgängig: {last['player']} ist zurück auf dem Board."
+            
+            if last['team_id'] == my_team_id and last['player'] not in st.session_state.queue:
+                st.session_state.queue.append(last['player'])
+                
             st.rerun()
 
 if 'last_msg' in st.session_state:
     if "rückgängig" in st.session_state.last_msg: st.warning(st.session_state.last_msg)
+    elif "Queue" in st.session_state.last_msg: st.info(st.session_state.last_msg)
     else: st.success(st.session_state.last_msg)
     del st.session_state.last_msg
 
@@ -375,9 +453,6 @@ else: picks_to_wait = next_own_pick - current_pick_num
 picks_to_wait = max(0, picks_to_wait)
 
 sim_base_df = available_df.copy()
-if 'adp' in sim_base_df.columns: sim_base_df['adp'] = sim_base_df['adp'].fillna(999)
-else: sim_base_df['adp'] = 999 
-
 sim_base_df['Rank_ADP'] = sim_base_df['adp'].rank(ascending=True)
 sim_base_df['Rank_Z'] = sim_base_df['z_score'].rank(ascending=False)
 sim_base_df['Rank_VOR'] = sim_base_df['VOR_Waiver'].rank(ascending=False)
@@ -413,8 +488,9 @@ search_term = st.text_input("🔍 Spielersuche (filtert das Board):", "")
 
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Overall", "RB", "WR", "TE", "QB", "👥 Liga-Roster"])
 
-cols_overall = ['Ovr Rank', 'player', 'Pos Rank', 'team', 'z_score', 'VONA', 'VOR_Starter', 'adp', 'Risk'] + selected_sources
-rename_overall = {'z_score': 'Z-Score', 'VOR_Starter': 'VOR (Start)', 'adp': 'ADP', 'Risk': 'Risk (CV)'}
+# Dynamische Spaltenauswahl basierend auf Checkboxen
+cols_overall = ['Ovr Rank', 'player', 'Pos Rank', 'points', 'team', 'z_score', 'VONA', 'VOR_Starter', 'Risk'] + selected_adps + selected_sources
+rename_overall = {'z_score': 'Z-Score', 'VOR_Starter': 'VOR (Start)', 'Risk': 'Risk (CV)', 'points': 'Points'}
 
 with tab1:
     sort_by = st.radio("🔀 Sortieren nach:", ["Z-Score", "VONA", "VOR_Starter"], horizontal=True)
@@ -429,9 +505,10 @@ with tab1:
         
     display_df = display_df.rename(columns=rename_overall)
     display_df['VOR (Start)'] = display_df['VOR (Start)'].round(1) 
+    display_df['Points'] = display_df['Points'].round(1)
     display_df = display_df.head(50)
     
-    st.caption("💡 Klicke auf einen Spieler, um das Draft-Popup zu öffnen.")
+    st.caption("💡 Klicke auf einen Spieler, um das Draft-Popup zu öffnen (dort kannst du ihn auch in die Queue legen).")
     
     event = st.dataframe(display_df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
     
@@ -439,8 +516,8 @@ with tab1:
         selected_player = display_df.iloc[event.selection.rows[0]]['player']
         draft_confirmation_dialog(selected_player)
 
-cols_pos = ['Pos Rank', 'player', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'RPV (%)', 'VOR_Waiver', 'adp', 'Risk'] + selected_sources
-rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'adp': 'ADP', 'Risk': 'Risk (CV)'}
+cols_pos = ['Pos Rank', 'player', 'points', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
+rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'Risk': 'Risk (CV)', 'points': 'Points'}
 
 def render_pos_tab(pos):
     plot_position_cliff(pos)
@@ -452,6 +529,7 @@ def render_pos_tab(pos):
     pos_df = pos_df.sort_values('VOR_Starter', ascending=False).rename(columns=rename_pos)
     pos_df['VOR (Start)'] = pos_df['VOR (Start)'].round(1)
     pos_df['VOR (Waiver)'] = pos_df['VOR (Waiver)'].round(1)
+    pos_df['Points'] = pos_df['Points'].round(1)
     
     display_pos_df = pos_df.head(15)
     
