@@ -366,7 +366,6 @@ def plot_position_cliff(pos, limit=15):
 
     first_avail_idx = available_this_pos.index[0]
     start_idx = pos_all.index.get_loc(first_avail_idx)
-    # Nutze das übergebene Limit für den sichtbaren Grafik-Ausschnitt
     window = pos_all.iloc[start_idx : start_idx + limit].copy()
     
     def get_marker_symbol(rank):
@@ -457,7 +456,6 @@ sim_base_df = sim_base_df.sort_values('Opponent_Score', ascending=True)
 
 available_df['VONA'] = available_df['VOR_Waiver'].round(1)
 
-# Limit auf 150 erhöht, um tiefere Draft-Phasen akkurat zu berechnen
 top_candidates = available_df.sort_values('z_score', ascending=False).head(150)
 vona_dict = {}
 
@@ -483,7 +481,6 @@ available_df['VONA'] = available_df['player'].map(vona_dict).fillna(available_df
 st.markdown("### 📋 Draft Board")
 search_term = st.text_input("🔍 Spielersuche (filtert das Board):", "")
 
-# NEUE TABS HINZUGEFÜGT FÜR KICKER & DST
 tab_ovr, tab_rb, tab_wr, tab_te, tab_qb, tab_k, tab_dst, tab_roster = st.tabs(["Overall", "RB", "WR", "TE", "QB", "K", "DST", "👥 Liga-Roster"])
 
 cols_overall = ['Ovr Rank', 'player', 'Pos Rank', 'points', 'team', 'z_score', 'VONA', 'VOR_Starter', 'Risk'] + selected_adps + selected_sources
@@ -504,12 +501,19 @@ with tab_ovr:
     display_df['VOR (Start)'] = display_df['VOR (Start)'].round(1) 
     display_df['Points'] = display_df['Points'].round(1)
     
-    # LIMIT FÜR OVERALL AUF 200 ERHÖHT
     display_df = display_df.head(200)
     
     st.caption("💡 Klicke auf einen Spieler, um das Draft-Popup zu öffnen (dort kannst du ihn auch in die Queue legen).")
     
-    event = st.dataframe(display_df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    # NEU: Der key-Parameter verhindert den DuplicateElementId Error
+    event = st.dataframe(
+        display_df, 
+        use_container_width=True, 
+        hide_index=True, 
+        on_select="rerun", 
+        selection_mode="single-row",
+        key="df_overall"
+    )
     
     if len(event.selection.rows) > 0:
         selected_player = display_df.iloc[event.selection.rows[0]]['player']
@@ -518,7 +522,6 @@ with tab_ovr:
 cols_pos = ['Pos Rank', 'player', 'points', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
 rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'Risk': 'Risk (CV)', 'points': 'Points'}
 
-# NEU: Parameter `limit` ermöglicht positionsabhängige Tabellenlänge
 def render_pos_tab(pos, limit):
     plot_position_cliff(pos, limit)
     pos_df = available_df[available_df['pos'] == pos][cols_pos].copy()
@@ -531,15 +534,21 @@ def render_pos_tab(pos, limit):
     pos_df['VOR (Waiver)'] = pos_df['VOR (Waiver)'].round(1)
     pos_df['Points'] = pos_df['Points'].round(1)
     
-    # Dynamisches Limit anwenden
     display_pos_df = pos_df.head(limit)
     
-    event = st.dataframe(display_pos_df, use_container_width=True, hide_index=True, on_select="rerun", selection_mode="single-row")
+    # NEU: Der dynamische key-Parameter (f"df_{pos}") für jedes Tab
+    event = st.dataframe(
+        display_pos_df, 
+        use_container_width=True, 
+        hide_index=True, 
+        on_select="rerun", 
+        selection_mode="single-row",
+        key=f"df_{pos}"
+    )
     if len(event.selection.rows) > 0:
         selected_player = display_pos_df.iloc[event.selection.rows[0]]['player']
         draft_confirmation_dialog(selected_player)
 
-# INDIVIDUELLE LIMITS (Top 50 für WR/RB, Top 20 für Rest)
 with tab_rb: render_pos_tab('RB', 50)
 with tab_wr: render_pos_tab('WR', 50)
 with tab_te: render_pos_tab('TE', 20)
