@@ -141,7 +141,6 @@ weighted_sum = (working_df[selected_sources].fillna(0) * w_series).sum(axis=1)
 working_df['points'] = np.where(sum_weights > 0, weighted_sum / sum_weights, 0)
 working_df['sd_pts'] = working_df[selected_sources].std(axis=1).fillna(0)
 
-# OPTIMIERUNG: Ceiling und Floor berechnen
 working_df['Floor'] = (working_df['points'] - working_df['sd_pts']).round(1)
 working_df['Ceiling'] = (working_df['points'] + working_df['sd_pts']).round(1)
 
@@ -166,7 +165,6 @@ def calculate_dynamic_metrics(df):
     df['VOR_Starter'] = df.apply(lambda row: row['points'] - baseline_starter_pts.get(row['pos'], 0), axis=1)
     df['VOR_Waiver'] = df.apply(lambda row: row['points'] - baseline_waiver_pts.get(row['pos'], 0), axis=1)
 
-    # OPTIMIERUNG: Scarcity-Gewichtung über Top 3 Mean statt absoluten Max-Outlier
     pos_value_pool = {}
     for pos in df['pos'].unique():
         top3_mean = df[df['pos'] == pos]['points'].nlargest(3).mean()
@@ -188,7 +186,14 @@ def calculate_dynamic_metrics(df):
             if std_pts > 0:
                 pos_mask = df['pos'] == pos
                 raw_z = (df.loc[pos_mask, 'points'] - mean_pts) / std_pts
-                df.loc[pos_mask, 'z_score'] = raw_z * dynamic_weights.get(pos, 1.0)
+                weighted_z = raw_z * dynamic_weights.get(pos, 1.0)
+                
+                # === NEU: HARTER PENALTY FÜR KICKER & DEFENSE ===
+                # Drückt diese Positionen komplett ans Ende des Overall-Boards
+                if pos in ['K', 'DST']:
+                    weighted_z -= 3.0
+                    
+                df.loc[pos_mask, 'z_score'] = weighted_z
 
     df['z_score'] = df['z_score'].round(2)
 
@@ -197,8 +202,6 @@ def calculate_dynamic_metrics(df):
         n_tiers = 8 if pos in ['QB', 'RB', 'WR'] else 6 if pos == 'TE' else 3 
         
         pos_df = pos_df.sort_values('VOR_Starter', ascending=False).reset_index(drop=True)
-        
-        # OPTIMIERUNG: Drop-Off berechnen (Verlust zum unmittelbar nächsten Spieler)
         pos_df['Drop-Off'] = (pos_df['points'].shift(-1) - pos_df['points']).fillna(0).round(1)
         
         pos_df['drop'] = pos_df['VOR_Starter'].diff(-1)
@@ -458,7 +461,6 @@ sim_base_df['Rank_VOR'] = sim_base_df['VOR_Waiver'].rank(ascending=False)
 sim_base_df['Opponent_Score'] = (sim_base_df['Rank_ADP'] * ADP_W) + (sim_base_df['Rank_Z'] * Z_W) + (sim_base_df['Rank_VOR'] * VOR_W)
 sim_base_df = sim_base_df.sort_values('Opponent_Score', ascending=True)
 
-# OPTIMIERUNG: Dynamische Needs für die Teams im VONA Gap
 gap_picks = [current_pick_num + i for i in range(1, picks_to_wait + 1)]
 gap_teams = [get_team_for_pick(p) for p in gap_picks]
 gap_needs = {'RB': 0, 'WR': 0, 'TE': 0, 'QB': 0, 'K': 0, 'DST': 0}
