@@ -165,6 +165,12 @@ def calculate_dynamic_metrics(df):
     df['VOR_Starter'] = df.apply(lambda row: row['points'] - baseline_starter_pts.get(row['pos'], 0), axis=1)
     df['VOR_Waiver'] = df.apply(lambda row: row['points'] - baseline_waiver_pts.get(row['pos'], 0), axis=1)
 
+    # === FEHLENDEN BLOCK WIEDER EINGEFÜGT ===
+    df['CV'] = df['sd_pts'] / df['points']
+    df['CV'] = df['CV'].replace([np.inf, -np.inf], np.nan).fillna(0)
+    df['Risk'] = df['CV'].round(2)
+    # ========================================
+
     pos_value_pool = {}
     for pos in df['pos'].unique():
         top3_mean = df[df['pos'] == pos]['points'].nlargest(3).mean()
@@ -188,8 +194,6 @@ def calculate_dynamic_metrics(df):
                 raw_z = (df.loc[pos_mask, 'points'] - mean_pts) / std_pts
                 weighted_z = raw_z * dynamic_weights.get(pos, 1.0)
                 
-                # === NEU: HARTER PENALTY FÜR KICKER & DEFENSE ===
-                # Drückt diese Positionen komplett ans Ende des Overall-Boards
                 if pos in ['K', 'DST']:
                     weighted_z -= 3.0
                     
@@ -398,7 +402,7 @@ def plot_position_cliff(pos, limit=15):
         y=window['VOR_Starter'],
         mode='markers+text',
         marker=dict(
-            size=[(15 + (r * 20)) * (1.5 if sym != 'circle' else 1.0) if not pd.isna(r) else 15 for r, sym in zip(window['CV'], window['symbol'])], 
+            size=[(15 + (r * 20)) * (1.5 if sym != 'circle' else 1.0) if not pd.isna(r) else 15 for r, sym in zip(window['Risk'], window['symbol'])], 
             color=window['color'],
             symbol=window['symbol'], 
             line=dict(width=1.5, color='DarkSlateGrey'),
@@ -553,7 +557,7 @@ with tab_ovr:
         selected_player = display_df.iloc[event.selection.rows[0]]['player']
         draft_confirmation_dialog(selected_player)
 
-cols_pos = ['Pos Rank', 'player', 'points', 'Floor', 'Ceiling', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'Drop-Off', 'RPV (%)', 'VOR_Waiver'] + selected_adps + selected_sources
+cols_pos = ['Pos Rank', 'player', 'points', 'Floor', 'Ceiling', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'Drop-Off', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
 rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'points': 'Points'}
 
 def render_pos_tab(pos, limit):
