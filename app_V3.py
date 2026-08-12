@@ -141,6 +141,10 @@ weighted_sum = (working_df[selected_sources].fillna(0) * w_series).sum(axis=1)
 working_df['points'] = np.where(sum_weights > 0, weighted_sum / sum_weights, 0)
 working_df['sd_pts'] = working_df[selected_sources].std(axis=1).fillna(0)
 
+# OPTIMIERUNG: Ceiling und Floor berechnen
+working_df['Floor'] = (working_df['points'] - working_df['sd_pts']).round(1)
+working_df['Ceiling'] = (working_df['points'] + working_df['sd_pts']).round(1)
+
 working_df['adp'] = working_df['adp_average'].fillna(999) if 'adp_average' in working_df.columns else 999
 
 def calculate_dynamic_metrics(df):
@@ -162,15 +166,12 @@ def calculate_dynamic_metrics(df):
     df['VOR_Starter'] = df.apply(lambda row: row['points'] - baseline_starter_pts.get(row['pos'], 0), axis=1)
     df['VOR_Waiver'] = df.apply(lambda row: row['points'] - baseline_waiver_pts.get(row['pos'], 0), axis=1)
 
-    df['CV'] = df['sd_pts'] / df['points']
-    df['CV'] = df['CV'].replace([np.inf, -np.inf], np.nan).fillna(0)
-    df['Risk'] = df['CV'].round(2)
-
+    # OPTIMIERUNG: Scarcity-Gewichtung über Top 3 Mean statt absoluten Max-Outlier
     pos_value_pool = {}
     for pos in df['pos'].unique():
-        max_pts = df[df['pos'] == pos]['points'].max()
+        top3_mean = df[df['pos'] == pos]['points'].nlargest(3).mean()
         baseline_pts = baseline_starter_pts.get(pos, 0)
-        pos_value_pool[pos] = max_pts - baseline_pts
+        pos_value_pool[pos] = max(0, top3_mean - baseline_pts)
 
     max_pool = max(pos_value_pool.values()) if pos_value_pool else 1
     dynamic_weights = {pos: (val / max_pool) for pos, val in pos_value_pool.items()}
@@ -195,18 +196,21 @@ def calculate_dynamic_metrics(df):
         pos = pos_df['pos'].iloc[0]
         n_tiers = 8 if pos in ['QB', 'RB', 'WR'] else 6 if pos == 'TE' else 3 
         
-        if len(pos_df) < n_tiers:
-            pos_df['tier_label'] = "Tier 1"
-            return pos_df
-            
         pos_df = pos_df.sort_values('VOR_Starter', ascending=False).reset_index(drop=True)
-        pos_df['drop'] = pos_df['VOR_Starter'].diff(-1)
         
+        # OPTIMIERUNG: Drop-Off berechnen (Verlust zum unmittelbar nächsten Spieler)
+        pos_df['Drop-Off'] = (pos_df['points'].shift(-1) - pos_df['points']).fillna(0).round(1)
+        
+        pos_df['drop'] = pos_df['VOR_Starter'].diff(-1)
         n_cliffs = n_tiers - 1
-        if pos == 'QB': cliff_indices = pos_df['drop'][:24].nlargest(n_cliffs).index.tolist()
-        else: cliff_indices = pos_df['drop'][:-1].nlargest(n_cliffs).index.tolist()
+        
+        if len(pos_df) > n_tiers:
+            if pos == 'QB': cliff_indices = pos_df['drop'][:24].nlargest(n_cliffs).index.tolist()
+            else: cliff_indices = pos_df['drop'][:-1].nlargest(n_cliffs).index.tolist()
+            cliff_indices.sort()
+        else:
+            cliff_indices = []
             
-        cliff_indices.sort()
         tiers = []
         current_tier = 1
         for idx in range(len(pos_df)):
@@ -391,7 +395,7 @@ def plot_position_cliff(pos, limit=15):
         y=window['VOR_Starter'],
         mode='markers+text',
         marker=dict(
-            size=[(15 + (r * 20)) * (1.5 if sym != 'circle' else 1.0) if not pd.isna(r) else 15 for r, sym in zip(window['Risk'], window['symbol'])], 
+            size=[(15 + (r * 20)) * (1.5 if sym != 'circle' else 1.0) if not pd.isna(r) else 15 for r, sym in zip(window['CV'], window['symbol'])], 
             color=window['color'],
             symbol=window['symbol'], 
             line=dict(width=1.5, color='DarkSlateGrey'),
@@ -441,7 +445,7 @@ if 'last_msg' in st.session_state:
     else: st.success(st.session_state.last_msg)
     del st.session_state.last_msg
 
-# === VONA SIMULATOR ===
+# === VONA SIMULATOR (Mit Needs Integration) ===
 if current_team_up == my_team_id: picks_to_wait = subsequent_own_pick - current_pick_num - 1 
 else: picks_to_wait = next_own_pick - current_pick_num
 
@@ -454,8 +458,24 @@ sim_base_df['Rank_VOR'] = sim_base_df['VOR_Waiver'].rank(ascending=False)
 sim_base_df['Opponent_Score'] = (sim_base_df['Rank_ADP'] * ADP_W) + (sim_base_df['Rank_Z'] * Z_W) + (sim_base_df['Rank_VOR'] * VOR_W)
 sim_base_df = sim_base_df.sort_values('Opponent_Score', ascending=True)
 
-available_df['VONA'] = available_df['VOR_Waiver'].round(1)
+# OPTIMIERUNG: Dynamische Needs für die Teams im VONA Gap
+gap_picks = [current_pick_num + i for i in range(1, picks_to_wait + 1)]
+gap_teams = [get_team_for_pick(p) for p in gap_picks]
+gap_needs = {'RB': 0, 'WR': 0, 'TE': 0, 'QB': 0, 'K': 0, 'DST': 0}
 
+for t_id in set(gap_teams):
+    t_roster = [p['pos'] for p in st.session_state.history if p['team_id'] == t_id]
+    gap_needs['RB'] += max(0, rb_spots + 1 - t_roster.count('RB'))
+    gap_needs['WR'] += max(0, wr_spots + 1 - t_roster.count('WR'))
+    gap_needs['TE'] += max(0, te_spots - t_roster.count('TE'))
+    gap_needs['QB'] += max(0, qb_spots - t_roster.count('QB'))
+    gap_needs['K'] += max(0, 1 - t_roster.count('K'))
+    gap_needs['DST'] += max(0, 1 - t_roster.count('DST'))
+
+if sum(gap_needs.values()) == 0:
+    gap_needs = {k: 99 for k in gap_needs}
+
+available_df['VONA'] = available_df['VOR_Waiver'].round(1)
 top_candidates = available_df.sort_values('z_score', ascending=False).head(150)
 vona_dict = {}
 
@@ -464,10 +484,23 @@ for idx, row in top_candidates.iterrows():
     pts = row['points']
     player_name = row['player']
     
-    sim_board = sim_base_df[sim_base_df['player'] != player_name]
-    if picks_to_wait > 0:
-        sim_board = sim_board.iloc[picks_to_wait:]
+    sim_drafted = []
+    temp_needs = gap_needs.copy()
+
+    for _, sim_row in sim_base_df.iterrows():
+        if len(sim_drafted) >= picks_to_wait: break
         
+        sim_name = sim_row['player']
+        sim_pos = sim_row['pos']
+
+        if sim_name == player_name: continue
+
+        if temp_needs.get(sim_pos, 1) > 0:
+            sim_drafted.append(sim_name)
+            if sim_pos in temp_needs:
+                temp_needs[sim_pos] -= 1
+        
+    sim_board = sim_base_df[(~sim_base_df['player'].isin(sim_drafted)) & (sim_base_df['player'] != player_name)]
     remaining_pos = sim_board[sim_board['pos'] == pos]
     
     if not remaining_pos.empty: vona = pts - remaining_pos['points'].max()
@@ -483,8 +516,8 @@ search_term = st.text_input("🔍 Spielersuche (filtert das Board):", "")
 
 tab_ovr, tab_rb, tab_wr, tab_te, tab_qb, tab_k, tab_dst, tab_roster = st.tabs(["Overall", "RB", "WR", "TE", "QB", "K", "DST", "👥 Liga-Roster"])
 
-cols_overall = ['Ovr Rank', 'player', 'Pos Rank', 'points', 'team', 'z_score', 'VONA', 'VOR_Starter', 'Risk'] + selected_adps + selected_sources
-rename_overall = {'z_score': 'Z-Score', 'VOR_Starter': 'VOR (Start)', 'Risk': 'Risk (CV)', 'points': 'Points'}
+cols_overall = ['Ovr Rank', 'player', 'Pos Rank', 'points', 'Floor', 'Ceiling', 'team', 'z_score', 'VONA', 'VOR_Starter', 'Drop-Off'] + selected_adps + selected_sources
+rename_overall = {'z_score': 'Z-Score', 'VOR_Starter': 'VOR (Start)', 'points': 'Points'}
 
 with tab_ovr:
     sort_by = st.radio("🔀 Sortieren nach:", ["Z-Score", "VONA", "VOR_Starter"], horizontal=True)
@@ -505,7 +538,6 @@ with tab_ovr:
     
     st.caption("💡 Klicke auf einen Spieler, um das Draft-Popup zu öffnen (dort kannst du ihn auch in die Queue legen).")
     
-    # NEU: Der key-Parameter verhindert den DuplicateElementId Error
     event = st.dataframe(
         display_df, 
         use_container_width=True, 
@@ -519,8 +551,8 @@ with tab_ovr:
         selected_player = display_df.iloc[event.selection.rows[0]]['player']
         draft_confirmation_dialog(selected_player)
 
-cols_pos = ['Pos Rank', 'player', 'points', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
-rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'Risk': 'Risk (CV)', 'points': 'Points'}
+cols_pos = ['Pos Rank', 'player', 'points', 'Floor', 'Ceiling', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'Drop-Off', 'RPV (%)', 'VOR_Waiver'] + selected_adps + selected_sources
+rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'points': 'Points'}
 
 def render_pos_tab(pos, limit):
     plot_position_cliff(pos, limit)
@@ -536,7 +568,6 @@ def render_pos_tab(pos, limit):
     
     display_pos_df = pos_df.head(limit)
     
-    # NEU: Der dynamische key-Parameter (f"df_{pos}") für jedes Tab
     event = st.dataframe(
         display_pos_df, 
         use_container_width=True, 
