@@ -165,11 +165,9 @@ def calculate_dynamic_metrics(df):
     df['VOR_Starter'] = df.apply(lambda row: row['points'] - baseline_starter_pts.get(row['pos'], 0), axis=1)
     df['VOR_Waiver'] = df.apply(lambda row: row['points'] - baseline_waiver_pts.get(row['pos'], 0), axis=1)
 
-    # === FEHLENDEN BLOCK WIEDER EINGEFÜGT ===
     df['CV'] = df['sd_pts'] / df['points']
     df['CV'] = df['CV'].replace([np.inf, -np.inf], np.nan).fillna(0)
     df['Risk'] = df['CV'].round(2)
-    # ========================================
 
     pos_value_pool = {}
     for pos in df['pos'].unique():
@@ -324,24 +322,7 @@ def get_tier_color(tier_str):
         gray_val = max(180 - (tier_num - 7) * 25, 50)
         return f"rgb({gray_val}, {gray_val}, {gray_val})"
 
-@st.dialog("Aktion für Spieler")
-def draft_confirmation_dialog(player_name):
-    st.markdown(f"Was möchtest du mit **{player_name}** tun?")
-    col1, col2, col3 = st.columns(3)
-    
-    if col1.button("✅ Draften", use_container_width=True):
-        draft_player(player_name)
-        st.rerun()
-        
-    if col2.button("⭐ Zur Queue", use_container_width=True):
-        if player_name not in st.session_state.queue:
-            st.session_state.queue.append(player_name)
-            st.session_state.last_msg = f"⭐ {player_name} zur Queue hinzugefügt!"
-        st.rerun()
-        
-    if col3.button("❌ Abbrechen", use_container_width=True):
-        st.rerun()
-
+# ZENTRALE DRAFT FUNKTION
 def draft_player(search_string):
     matches = available_df[available_df['player'].str.contains(search_string, case=False, na=False)]
     if not matches.empty:
@@ -542,20 +523,40 @@ with tab_ovr:
     
     display_df = display_df.head(200)
     
-    st.caption("💡 Klicke auf einen Spieler, um das Draft-Popup zu öffnen (dort kannst du ihn auch in die Queue legen).")
+    # NEU: Checkboxen für Draft & Queue einfügen
+    display_df.insert(0, '⭐ Queue', False)
+    display_df.insert(0, '✅ Draft', False)
     
-    event = st.dataframe(
+    st.caption("💡 Setze einfach den Haken bei 'Draft' oder 'Queue' direkt in der Tabelle!")
+    
+    editor_key = "editor_overall"
+    edited_df = st.data_editor(
         display_df, 
         use_container_width=True, 
         hide_index=True, 
-        on_select="rerun", 
-        selection_mode="single-row",
-        key="df_overall"
+        disabled=display_df.columns.drop(['✅ Draft', '⭐ Queue']), # Alle Spalten außer den Checkboxen sperren
+        key=editor_key
     )
     
-    if len(event.selection.rows) > 0:
-        selected_player = display_df.iloc[event.selection.rows[0]]['player']
-        draft_confirmation_dialog(selected_player)
+    # Prüfen, ob ein Haken gesetzt wurde
+    draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
+    queue_clicks = edited_df[edited_df['⭐ Queue'] == True]['player'].tolist()
+    
+    if draft_clicks:
+        draft_player(draft_clicks[0])
+        if editor_key in st.session_state: del st.session_state[editor_key] # Setzt Haken zurück
+        st.rerun()
+        
+    if queue_clicks:
+        added = False
+        for p in queue_clicks:
+            if p not in st.session_state.queue:
+                st.session_state.queue.append(p)
+                st.session_state.last_msg = f"⭐ {p} zur Queue hinzugefügt!"
+                added = True
+        if added:
+            if editor_key in st.session_state: del st.session_state[editor_key]
+            st.rerun()
 
 cols_pos = ['Pos Rank', 'player', 'points', 'Floor', 'Ceiling', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'Drop-Off', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
 rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'points': 'Points'}
@@ -574,17 +575,37 @@ def render_pos_tab(pos, limit):
     
     display_pos_df = pos_df.head(limit)
     
-    event = st.dataframe(
+    # NEU: Checkboxen für Draft & Queue einfügen
+    display_pos_df.insert(0, '⭐ Queue', False)
+    display_pos_df.insert(0, '✅ Draft', False)
+    
+    editor_key = f"editor_{pos}"
+    edited_df = st.data_editor(
         display_pos_df, 
         use_container_width=True, 
         hide_index=True, 
-        on_select="rerun", 
-        selection_mode="single-row",
-        key=f"df_{pos}"
+        disabled=display_pos_df.columns.drop(['✅ Draft', '⭐ Queue']),
+        key=editor_key
     )
-    if len(event.selection.rows) > 0:
-        selected_player = display_pos_df.iloc[event.selection.rows[0]]['player']
-        draft_confirmation_dialog(selected_player)
+    
+    draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
+    queue_clicks = edited_df[edited_df['⭐ Queue'] == True]['player'].tolist()
+    
+    if draft_clicks:
+        draft_player(draft_clicks[0])
+        if editor_key in st.session_state: del st.session_state[editor_key]
+        st.rerun()
+        
+    if queue_clicks:
+        added = False
+        for p in queue_clicks:
+            if p not in st.session_state.queue:
+                st.session_state.queue.append(p)
+                st.session_state.last_msg = f"⭐ {p} zur Queue hinzugefügt!"
+                added = True
+        if added:
+            if editor_key in st.session_state: del st.session_state[editor_key]
+            st.rerun()
 
 with tab_rb: render_pos_tab('RB', 50)
 with tab_wr: render_pos_tab('WR', 50)
