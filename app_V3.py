@@ -67,13 +67,11 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # === OPTIMIERT: PROJEKTIONEN & DEFAULT GEWICHTUNG ===
     with st.expander("📊 Projektionen & Gewichtung", expanded=True):
         st.caption("Welche Quellen sollen einfließen und wie stark?")
         selected_sources = []
         source_weights = {}
         
-        # NEU: Definition deiner Standard-Gewichte
         DEFAULT_WEIGHTS = {
             'FantasyPros': 60,
             'FantasySharks': 20,
@@ -87,7 +85,6 @@ with st.sidebar:
             col1, col2 = st.columns([1, 2])
             use_src = col1.checkbox(src, value=True)
             if use_src:
-                # Nutzt das definierte Standard-Gewicht oder fällt auf 100 zurück, falls die Quelle nicht im Dict steht
                 default_w = DEFAULT_WEIGHTS.get(src, 100)
                 w = col2.slider("Gewicht", 0, 100, default_w, key=f"w_{src}", label_visibility="collapsed")
                 if w > 0:
@@ -334,9 +331,44 @@ def get_tier_color(tier_str):
         gray_val = max(180 - (tier_num - 7) * 25, 50)
         return f"rgb({gray_val}, {gray_val}, {gray_val})"
 
-@st.dialog("Aktion für Spieler")
+# === NEU: DETAIL-POPUP FÜR PROJEKTIONEN ===
+@st.dialog("Spieler-Details & Aktion")
 def draft_confirmation_dialog(player_name):
-    st.markdown(f"Was möchtest du mit **{player_name}** tun?")
+    # Finde die kompletten Daten des Spielers
+    player_row = full_board[full_board['player'] == player_name].iloc[0]
+    
+    team_str = player_row.get('team', '')
+    st.markdown(f"### {player_name} ({player_row['pos']} - {team_str})")
+    
+    # Aufschlüsselung der Punkte berechnen
+    breakdown = []
+    actual_total_weight = 0
+    
+    for src in selected_sources:
+        val = player_row.get(src, np.nan)
+        if pd.notna(val) and val > 0:
+            w = source_weights[src]
+            calc_val = val * w
+            breakdown.append({
+                "Quelle": src, 
+                "Punkte": round(val, 1), 
+                "Gewicht": w,
+                "Wert": round(calc_val, 1)
+            })
+            actual_total_weight += w
+            
+    # Aufschlüsselung anzeigen
+    st.markdown(f"#### Projizierte Punkte: {player_row['points']:.1f}")
+    if breakdown:
+        b_df = pd.DataFrame(breakdown)
+        st.dataframe(b_df, hide_index=True, use_container_width=True)
+        sum_wert = sum(d['Wert'] for d in breakdown)
+        st.caption(f"*Mathematik: Summe der Werte ({round(sum_wert, 1)}) geteilt durch {actual_total_weight} Gesamtgewicht = {player_row['points']:.1f} Punkte*")
+    else:
+        st.write("Keine Quelldaten verfügbar.")
+        
+    st.markdown("---")
+    st.markdown("**Was möchtest du tun?**")
     col1, col2, col3 = st.columns(3)
     
     if col1.button("✅ Draften", use_container_width=True):
@@ -555,7 +587,7 @@ with tab_ovr:
     display_df.insert(0, '⭐ Queue', False)
     display_df.insert(0, '✅ Draft', False)
     
-    st.caption("💡 Setze einfach den Haken bei 'Draft' oder 'Queue' direkt in der Tabelle!")
+    st.caption("💡 Setze einfach den Haken bei 'Draft' oder klicke auf die Zeile, um die Details zu sehen!")
     
     editor_key = "editor_overall"
     edited_df = st.data_editor(
@@ -563,7 +595,9 @@ with tab_ovr:
         use_container_width=True, 
         hide_index=True, 
         disabled=display_df.columns.drop(['✅ Draft', '⭐ Queue']), 
-        key=editor_key
+        key=editor_key,
+        on_select="rerun",
+        selection_mode="single-row"
     )
     
     draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
@@ -584,6 +618,12 @@ with tab_ovr:
         if added:
             if editor_key in st.session_state: del st.session_state[editor_key]
             st.rerun()
+            
+    # Aufruf des neuen Popups bei Klick auf die Zeile
+    if len(st.session_state.get(editor_key, {}).get("selection", {}).get("rows", [])) > 0:
+        selected_index = st.session_state[editor_key]["selection"]["rows"][0]
+        selected_player = display_df.iloc[selected_index]['player']
+        draft_confirmation_dialog(selected_player)
 
 cols_pos = ['Pos Rank', 'player', 'points', 'Floor', 'Ceiling', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'Drop-Off', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
 rename_pos = {'tier_label': 'Tier', 'VOR_Starter': 'VOR (Start)', 'VOR_Waiver': 'VOR (Waiver)', 'points': 'Points'}
@@ -611,7 +651,9 @@ def render_pos_tab(pos, limit):
         use_container_width=True, 
         hide_index=True, 
         disabled=display_pos_df.columns.drop(['✅ Draft', '⭐ Queue']),
-        key=editor_key
+        key=editor_key,
+        on_select="rerun",
+        selection_mode="single-row"
     )
     
     draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
@@ -632,6 +674,12 @@ def render_pos_tab(pos, limit):
         if added:
             if editor_key in st.session_state: del st.session_state[editor_key]
             st.rerun()
+            
+    # Aufruf des neuen Popups bei Klick auf die Zeile
+    if len(st.session_state.get(editor_key, {}).get("selection", {}).get("rows", [])) > 0:
+        selected_index = st.session_state[editor_key]["selection"]["rows"][0]
+        selected_player = display_pos_df.iloc[selected_index]['player']
+        draft_confirmation_dialog(selected_player)
 
 with tab_rb: render_pos_tab('RB', 50)
 with tab_wr: render_pos_tab('WR', 50)
