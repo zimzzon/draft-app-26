@@ -331,16 +331,13 @@ def get_tier_color(tier_str):
         gray_val = max(180 - (tier_num - 7) * 25, 50)
         return f"rgb({gray_val}, {gray_val}, {gray_val})"
 
-# === NEU: DETAIL-POPUP FÜR PROJEKTIONEN ===
 @st.dialog("Spieler-Details & Aktion")
 def draft_confirmation_dialog(player_name):
-    # Finde die kompletten Daten des Spielers
     player_row = full_board[full_board['player'] == player_name].iloc[0]
     
     team_str = player_row.get('team', '')
     st.markdown(f"### {player_name} ({player_row['pos']} - {team_str})")
     
-    # Aufschlüsselung der Punkte berechnen
     breakdown = []
     actual_total_weight = 0
     
@@ -357,7 +354,6 @@ def draft_confirmation_dialog(player_name):
             })
             actual_total_weight += w
             
-    # Aufschlüsselung anzeigen
     st.markdown(f"#### Projizierte Punkte: {player_row['points']:.1f}")
     if breakdown:
         b_df = pd.DataFrame(breakdown)
@@ -584,24 +580,24 @@ with tab_ovr:
     
     display_df = display_df.head(200)
     
+    display_df.insert(0, '📊 Info', False)
     display_df.insert(0, '⭐ Queue', False)
     display_df.insert(0, '✅ Draft', False)
     
-    st.caption("💡 Setze einfach den Haken bei 'Draft' oder klicke auf die Zeile, um die Details zu sehen!")
+    st.caption("💡 Setze einfach den Haken bei 'Draft', 'Queue' oder 'Info' (für Details) direkt in der Tabelle!")
     
     editor_key = "editor_overall"
     edited_df = st.data_editor(
         display_df, 
         use_container_width=True, 
         hide_index=True, 
-        disabled=display_df.columns.drop(['✅ Draft', '⭐ Queue']), 
-        key=editor_key,
-        on_select="rerun",
-        selection_mode="single-row"
+        disabled=display_df.columns.drop(['✅ Draft', '⭐ Queue', '📊 Info']), 
+        key=editor_key
     )
     
     draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
     queue_clicks = edited_df[edited_df['⭐ Queue'] == True]['player'].tolist()
+    info_clicks = edited_df[edited_df['📊 Info'] == True]['player'].tolist()
     
     if draft_clicks:
         draft_player(draft_clicks[0])
@@ -619,10 +615,9 @@ with tab_ovr:
             if editor_key in st.session_state: del st.session_state[editor_key]
             st.rerun()
             
-    # Aufruf des neuen Popups bei Klick auf die Zeile
-    if len(st.session_state.get(editor_key, {}).get("selection", {}).get("rows", [])) > 0:
-        selected_index = st.session_state[editor_key]["selection"]["rows"][0]
-        selected_player = display_df.iloc[selected_index]['player']
+    if info_clicks:
+        selected_player = info_clicks[0]
+        if editor_key in st.session_state: del st.session_state[editor_key]
         draft_confirmation_dialog(selected_player)
 
 cols_pos = ['Pos Rank', 'player', 'points', 'Floor', 'Ceiling', 'team', 'tier_label', 'VONA', 'VOR_Starter', 'Drop-Off', 'RPV (%)', 'VOR_Waiver', 'Risk'] + selected_adps + selected_sources
@@ -642,6 +637,7 @@ def render_pos_tab(pos, limit):
     
     display_pos_df = pos_df.head(limit)
     
+    display_pos_df.insert(0, '📊 Info', False)
     display_pos_df.insert(0, '⭐ Queue', False)
     display_pos_df.insert(0, '✅ Draft', False)
     
@@ -650,14 +646,13 @@ def render_pos_tab(pos, limit):
         display_pos_df, 
         use_container_width=True, 
         hide_index=True, 
-        disabled=display_pos_df.columns.drop(['✅ Draft', '⭐ Queue']),
-        key=editor_key,
-        on_select="rerun",
-        selection_mode="single-row"
+        disabled=display_pos_df.columns.drop(['✅ Draft', '⭐ Queue', '📊 Info']),
+        key=editor_key
     )
     
     draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
     queue_clicks = edited_df[edited_df['⭐ Queue'] == True]['player'].tolist()
+    info_clicks = edited_df[edited_df['📊 Info'] == True]['player'].tolist()
     
     if draft_clicks:
         draft_player(draft_clicks[0])
@@ -674,11 +669,10 @@ def render_pos_tab(pos, limit):
         if added:
             if editor_key in st.session_state: del st.session_state[editor_key]
             st.rerun()
-            
-    # Aufruf des neuen Popups bei Klick auf die Zeile
-    if len(st.session_state.get(editor_key, {}).get("selection", {}).get("rows", [])) > 0:
-        selected_index = st.session_state[editor_key]["selection"]["rows"][0]
-        selected_player = display_pos_df.iloc[selected_index]['player']
+
+    if info_clicks:
+        selected_player = info_clicks[0]
+        if editor_key in st.session_state: del st.session_state[editor_key]
         draft_confirmation_dialog(selected_player)
 
 with tab_rb: render_pos_tab('RB', 50)
