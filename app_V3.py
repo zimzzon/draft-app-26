@@ -73,8 +73,8 @@ with st.sidebar:
         source_weights = {}
         
         DEFAULT_WEIGHTS = {
-            'FantasyPros': 60,
-            'FantasySharks': 20,
+            'FantasyPros': 80,
+            'FantasySharks': 0,
             'RTSports': 10,
             'CBS': 5,
             'ESPN': 5
@@ -83,9 +83,12 @@ with st.sidebar:
         available_sources = [col for col in QUELLEN_SPALTEN if col in raw_df.columns]
         for src in available_sources:
             col1, col2 = st.columns([1, 2])
-            use_src = col1.checkbox(src, value=True)
+            default_w = DEFAULT_WEIGHTS.get(src, 100)
+            
+            # Checkbox ist standardmäßig aus, wenn das Gewicht 0 ist (z.B. FantasySharks)
+            use_src = col1.checkbox(src, value=(default_w > 0))
+            
             if use_src:
-                default_w = DEFAULT_WEIGHTS.get(src, 100)
                 w = col2.slider("Gewicht", 0, 100, default_w, key=f"w_{src}", label_visibility="collapsed")
                 if w > 0:
                     selected_sources.append(src)
