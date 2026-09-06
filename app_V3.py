@@ -67,17 +67,29 @@ with st.sidebar:
 
     st.markdown("---")
     
+    # === OPTIMIERT: PROJEKTIONEN & DEFAULT GEWICHTUNG ===
     with st.expander("📊 Projektionen & Gewichtung", expanded=True):
         st.caption("Welche Quellen sollen einfließen und wie stark?")
         selected_sources = []
         source_weights = {}
+        
+        # NEU: Definition deiner Standard-Gewichte
+        DEFAULT_WEIGHTS = {
+            'FantasyPros': 60,
+            'FantasySharks': 20,
+            'RTSports': 10,
+            'CBS': 5,
+            'ESPN': 5
+        }
         
         available_sources = [col for col in QUELLEN_SPALTEN if col in raw_df.columns]
         for src in available_sources:
             col1, col2 = st.columns([1, 2])
             use_src = col1.checkbox(src, value=True)
             if use_src:
-                w = col2.slider("Gewicht", 0, 100, 100, key=f"w_{src}", label_visibility="collapsed")
+                # Nutzt das definierte Standard-Gewicht oder fällt auf 100 zurück, falls die Quelle nicht im Dict steht
+                default_w = DEFAULT_WEIGHTS.get(src, 100)
+                w = col2.slider("Gewicht", 0, 100, default_w, key=f"w_{src}", label_visibility="collapsed")
                 if w > 0:
                     selected_sources.append(src)
                     source_weights[src] = w
@@ -322,7 +334,24 @@ def get_tier_color(tier_str):
         gray_val = max(180 - (tier_num - 7) * 25, 50)
         return f"rgb({gray_val}, {gray_val}, {gray_val})"
 
-# ZENTRALE DRAFT FUNKTION
+@st.dialog("Aktion für Spieler")
+def draft_confirmation_dialog(player_name):
+    st.markdown(f"Was möchtest du mit **{player_name}** tun?")
+    col1, col2, col3 = st.columns(3)
+    
+    if col1.button("✅ Draften", use_container_width=True):
+        draft_player(player_name)
+        st.rerun()
+        
+    if col2.button("⭐ Zur Queue", use_container_width=True):
+        if player_name not in st.session_state.queue:
+            st.session_state.queue.append(player_name)
+            st.session_state.last_msg = f"⭐ {player_name} zur Queue hinzugefügt!"
+        st.rerun()
+        
+    if col3.button("❌ Abbrechen", use_container_width=True):
+        st.rerun()
+
 def draft_player(search_string):
     matches = available_df[available_df['player'].str.contains(search_string, case=False, na=False)]
     if not matches.empty:
@@ -523,7 +552,6 @@ with tab_ovr:
     
     display_df = display_df.head(200)
     
-    # NEU: Checkboxen für Draft & Queue einfügen
     display_df.insert(0, '⭐ Queue', False)
     display_df.insert(0, '✅ Draft', False)
     
@@ -534,17 +562,16 @@ with tab_ovr:
         display_df, 
         use_container_width=True, 
         hide_index=True, 
-        disabled=display_df.columns.drop(['✅ Draft', '⭐ Queue']), # Alle Spalten außer den Checkboxen sperren
+        disabled=display_df.columns.drop(['✅ Draft', '⭐ Queue']), 
         key=editor_key
     )
     
-    # Prüfen, ob ein Haken gesetzt wurde
     draft_clicks = edited_df[edited_df['✅ Draft'] == True]['player'].tolist()
     queue_clicks = edited_df[edited_df['⭐ Queue'] == True]['player'].tolist()
     
     if draft_clicks:
         draft_player(draft_clicks[0])
-        if editor_key in st.session_state: del st.session_state[editor_key] # Setzt Haken zurück
+        if editor_key in st.session_state: del st.session_state[editor_key] 
         st.rerun()
         
     if queue_clicks:
@@ -575,7 +602,6 @@ def render_pos_tab(pos, limit):
     
     display_pos_df = pos_df.head(limit)
     
-    # NEU: Checkboxen für Draft & Queue einfügen
     display_pos_df.insert(0, '⭐ Queue', False)
     display_pos_df.insert(0, '✅ Draft', False)
     
